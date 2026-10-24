@@ -1,0 +1,40 @@
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+node_modules/
+.next/
+out/
+dist/
+build/
+
+.pytest_cache/
+.coverage
+htmlcov/
+
+.DS_Store
+.idea/
+.vscode/
+
+
+# Secrets et configurations locales
+.env
+.env.*
+!.env.example
+frontend/.env.local
+
+# Dépendances et fichiers générés du frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/dist/
+frontend/build/
+
+# Dépôts Git imbriqués et sauvegardes locales
+frontend/.git/
+*.log
