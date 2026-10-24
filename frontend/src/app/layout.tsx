@@ -16,11 +16,11 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "HTI — Hackthus Threat Intelligence",
-    template: "%s | HTI",
+    default: "Cyber Threat Intelligence",
+    template: "%s | Cyber Threat Intelligence",
   },
   description:
-    "Plateforme communautaire de Threat Intelligence pour rechercher et signaler des indicateurs suspects.",
+    "Plateforme communautaire de Cyber Threat Intelligence pour rechercher, documenter et signaler des indicateurs de compromission.",
 };
 
 export default function RootLayout({

@@ -19,14 +19,14 @@ export default function AppNavigation() {
       <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
         <Link href="/" className="flex items-center gap-3">
           <span className="flex h-11 w-11 items-center justify-center rounded-xl border border-cyan-400/30 bg-cyan-400/10 text-lg font-black text-cyan-300">
-            H
+            CTI
           </span>
           <span>
             <span className="block text-lg font-bold tracking-tight text-white">
-              HTI
+              Cyber Threat Intelligence
             </span>
             <span className="block text-xs text-slate-400">
-              Hackthus Threat Intelligence
+              Community Threat Intelligence Platform
             </span>
           </span>
         </Link>

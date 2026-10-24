@@ -80,7 +80,7 @@ export default function Home() {
       <section className="mx-auto max-w-4xl px-6 pb-20 pt-20">
         <div className="mb-10 text-center">
           <p className="mb-4 text-sm font-semibold uppercase tracking-[0.25em] text-cyan-400">
-            Threat Intelligence communautaire
+            Cyber Threat Intelligence communautaire
           </p>
 
           <h1 className="text-4xl font-bold leading-tight sm:text-6xl">
@@ -92,7 +92,7 @@ export default function Home() {
 
           <p className="mx-auto mt-6 max-w-2xl text-lg text-slate-400">
             Recherchez des domaines, des URLs et des adresses e-mail
-            pour consulter les informations disponibles dans HTI.
+            pour consulter les informations disponibles dans Cyber Threat Intelligence.
           </p>
         </div>
 
@@ -201,12 +201,12 @@ export default function Home() {
         <p className="mt-8 text-center text-sm leading-6 text-slate-500">
           Un résultat inconnu ne signifie pas qu’une ressource est sûre.
           Les données affichées dépendent des informations disponibles
-          dans HTI. Aucune ressource n’est visitée automatiquement.
+          dans Cyber Threat Intelligence. Aucune ressource n’est visitée automatiquement.
         </p>
       </section>
 
       <footer className="border-t border-slate-800 px-6 py-6 text-center text-sm text-slate-500">
-        HTI — Projet communautaire de Threat Intelligence
+        Cyber Threat Intelligence · Plateforme communautaire
       </footer>
     </main>
   );

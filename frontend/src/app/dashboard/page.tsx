@@ -118,14 +118,14 @@ export default function DashboardPage() {
         <section className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="mb-3 text-xs font-bold uppercase tracking-[0.25em] text-cyan-400">
-              Threat Intelligence Platform
+              Cyber Threat Intelligence
             </p>
             <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
               Tableau de bord
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
               Vue d’ensemble des indicateurs et des signalements de la
-              communauté Hackthus Threat Intelligence.
+              communauté Cyber Threat Intelligence.
             </p>
           </div>
 
@@ -156,7 +156,7 @@ export default function DashboardPage() {
               </span>
               <div>
                 <p className="text-sm font-semibold">
-                  {error ? "API indisponible" : "Vue d'ensemble HTI"}
+                  {error ? "API indisponible" : "Vue d'ensemble CTI"}
                 </p>
                 <p className="mt-1 text-xs text-slate-400">
                   {error
@@ -321,7 +321,7 @@ export default function DashboardPage() {
         </section>
 
         <footer className="border-t border-slate-800 pt-5 text-center text-xs text-slate-500">
-          HTI · Hackthus Threat Intelligence · Community Edition
+          Cyber Threat Intelligence · Community Edition
         </footer>
       </div>
     </main>

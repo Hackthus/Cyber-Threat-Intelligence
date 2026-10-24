@@ -90,7 +90,7 @@ export default function ReportsPage() {
         <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="mb-3 text-xs font-bold uppercase tracking-[0.25em] text-cyan-400">
-              Threat Intelligence Platform
+              Cyber Threat Intelligence
             </p>
             <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
               Historique des signalements
@@ -151,7 +151,7 @@ export default function ReportsPage() {
               </p>
             </div>
             <span className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-400">
-              API HTI
+              API CTI
             </span>
           </div>
 
@@ -255,7 +255,7 @@ export default function ReportsPage() {
         </section>
 
         <p className="text-center text-xs text-slate-600">
-          HTI · Hackthus Threat Intelligence · Community Edition
+          Cyber Threat Intelligence · Community Edition
         </p>
       </div>
     </main>

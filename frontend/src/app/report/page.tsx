@@ -91,7 +91,7 @@ export default function ReportPage() {
 
         <header className="mb-8 mt-8">
           <p className="text-sm font-semibold uppercase tracking-widest text-cyan-400">
-            Hackthus Threat Intelligence
+            Cyber Threat Intelligence
           </p>
           <h1 className="mt-3 text-3xl font-bold sm:text-4xl">
             Signaler une ressource suspecte
@@ -237,7 +237,7 @@ export default function ReportPage() {
 
           <p className="text-xs leading-5 text-slate-500">
             Le signalement sera enregistré comme étant en attente de
-            vérification. HTI ne visite pas automatiquement la ressource
+            vérification. La plateforme ne visite pas automatiquement la ressource
             soumise.
           </p>
         </form>
