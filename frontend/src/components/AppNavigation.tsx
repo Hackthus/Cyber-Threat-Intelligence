@@ -55,10 +55,23 @@ export default function AppNavigation() {
             );
           })}
         </nav>
+        
+      <div className="flex items-center gap-2">
+        <Link
+          href="/login"
+          className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-cyan-400/50 hover:text-white"
+        >
+          Connexion
+        </Link>
 
-        <span className="hidden rounded-full border border-emerald-800/70 bg-emerald-950/40 px-3 py-1.5 text-xs text-emerald-300 xl:inline-flex">
-          ● Community Edition
-        </span>
+        <Link
+          href="/register"
+          className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
+        >
+          Inscription
+        </Link>
+      </div>
+
       </div>
     </header>
   );

@@ -2,8 +2,9 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 
-type ResourceType = "domain" | "url" | "email";
+type ResourceType = "domain" | "url" | "email" | "ip";
 
 type ReportResponse = {
   id: number;
@@ -15,6 +16,7 @@ const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
 export default function ReportPage() {
+  const router = useRouter();
   const [resourceType, setResourceType] =
     useState<ResourceType>("domain");
   const [value, setValue] = useState("");
@@ -65,9 +67,11 @@ export default function ReportPage() {
         throw new Error(message);
       }
 
-      setSuccess(data as ReportResponse);
-      setValue("");
-      setDescription("");
+      const report = data as ReportResponse;
+
+      router.push(
+        `/report/success?id=${report.id}&status=${encodeURIComponent(report.report_status)}&indicator=${encodeURIComponent(value.trim())}&type=${encodeURIComponent(resourceType)}`
+      );
     } catch (err) {
       setError(
         err instanceof Error
@@ -152,6 +156,7 @@ export default function ReportPage() {
               className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3"
             >
               <option value="domain">Nom de domaine</option>
+              <option value="ip">Adresse IP (IPv4 / IPv6)</option>
               <option value="url">URL</option>
               <option value="email">Adresse e-mail</option>
             </select>
@@ -176,7 +181,9 @@ export default function ReportPage() {
                   ? "exemple.com"
                   : resourceType === "url"
                     ? "https://exemple.com/page"
-                    : "contact@exemple.com"
+                    : resourceType === "email"
+                      ? "contact@exemple.com"
+                      : "192.0.2.1 ou 2001:db8::1"
               }
               className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 outline-none focus:border-cyan-500"
             />

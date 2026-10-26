@@ -51,17 +51,36 @@ function formatDate(value: string | null) {
 
 export default function ReportsPage() {
   const [data, setData] = useState<ReportsResponse | null>(null);
+  
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [offset, setOffset] = useState(0);
 
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [resourceTypeFilter, setResourceTypeFilter] = useState("");
+
+
+  
   const loadReports = useCallback(async () => {
     setLoading(true);
     setError("");
 
     try {
+      const params = new URLSearchParams({
+        limit: "20",
+        offset: String(offset),
+      });
+
+      if (search) params.set("search", search);
+      if (statusFilter) params.set("status", statusFilter);
+      if (resourceTypeFilter) {
+        params.set("resource_type", resourceTypeFilter);
+      }
+
       const response = await fetch(
-        `${API_URL}/api/v1/reports?limit=20&offset=${offset}`,
+        `${API_URL}/api/v1/reports?${params.toString()}`,
         { cache: "no-store" }
       );
 
@@ -78,11 +97,17 @@ export default function ReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, [offset]);
+  }, [offset, search, statusFilter, resourceTypeFilter]);
+
 
   useEffect(() => {
     void loadReports();
   }, [loadReports]);
+
+  useEffect(() => {
+    setOffset(0);
+  }, [search, statusFilter, resourceTypeFilter]);
+
 
   return (
     <main className="min-h-screen px-4 py-10 text-slate-100 sm:px-6 lg:px-8">
@@ -109,6 +134,106 @@ export default function ReportsPage() {
             {loading ? "Chargement..." : "↻ Actualiser"}
           </button>
         </header>
+
+
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
+          <div className="grid gap-4 md:grid-cols-3">
+            <div>
+              <label
+                htmlFor="report-search"
+                className="mb-2 block text-sm font-medium text-slate-300"
+              >
+                Rechercher
+              </label>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  setOffset(0);
+                  setSearch(searchInput.trim());
+                }}
+              >
+                <input
+                  id="report-search"
+                  type="search"
+                  value={searchInput}
+                  onChange={(event) => setSearchInput(event.target.value)}
+                  placeholder="Domaine, URL, IP, menace..."
+                  maxLength={200}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-sm outline-none focus:border-cyan-500"
+                />
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="mt-2 w-full rounded-xl bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-500 disabled:opacity-50"
+                >
+                  Rechercher
+                </button>
+              </form>
+            </div>
+
+            <div>
+              <label
+                htmlFor="report-status"
+                className="mb-2 block text-sm font-medium text-slate-300"
+              >
+                Statut
+              </label>
+              <select
+                id="report-status"
+                value={statusFilter}
+                onChange={(event) => {
+                  setOffset(0);
+                  setStatusFilter(event.target.value);
+                }}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-sm outline-none focus:border-cyan-500"
+              >
+                <option value="">Tous les statuts</option>
+                <option value="pending">En attente</option>
+                <option value="confirmed">Confirmés</option>
+                <option value="rejected">Rejetés</option>
+              </select>
+            </div>
+
+            <div>
+              <label
+                htmlFor="report-resource-type"
+                className="mb-2 block text-sm font-medium text-slate-300"
+              >
+                Type de ressource
+              </label>
+              <select
+                id="report-resource-type"
+                value={resourceTypeFilter}
+                onChange={(event) => {
+                  setOffset(0);
+                  setResourceTypeFilter(event.target.value);
+                }}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-sm outline-none focus:border-cyan-500"
+              >
+                <option value="">Tous les types</option>
+                <option value="url">URL</option>
+                <option value="domain">Domaine</option>
+                <option value="email">E-mail</option>
+                <option value="ip">Adresse IP</option>
+              </select>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setSearchInput("");
+              setSearch("");
+              setStatusFilter("");
+              setResourceTypeFilter("");
+              setOffset(0);
+            }}
+            className="mt-4 text-sm text-cyan-400 hover:text-cyan-300"
+          >
+            Réinitialiser les filtres
+          </button>
+        </section>
+
 
         <section className="grid gap-4 sm:grid-cols-3">
           <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
@@ -183,7 +308,18 @@ export default function ReportsPage() {
                     {data.items.map((report) => (
                       <tr
                         key={report.id}
-                        className="transition hover:bg-slate-800/40"
+                        onClick={() => {
+                          window.location.href = `/reports/${report.id}`;
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            window.location.href = `/reports/${report.id}`;
+                          }
+                        }}
+                        tabIndex={0}
+                        role="link"
+                        aria-label={`Voir les détails du signalement ${report.id}`}
+                        className="cursor-pointer transition hover:bg-slate-800/60 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-cyan-500"
                       >
                         <td className="px-5 py-4">
                           <p className="max-w-xs break-all font-medium text-cyan-300">
