@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 type ReportItem = {
   id: number;
   indicator_id: number;
-  resource_type: "url" | "domain" | "email" | string;
+  resource_type: "url" | "domain" | "email" | "ip" | string;
   value: string;
   threat_type: string;
   description: string;
@@ -24,6 +24,8 @@ type ReportsResponse = {
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
+const PAGE_SIZE = 20;
+
 const statusLabels: Record<string, string> = {
   pending: "En attente",
   confirmed: "Confirmé",
@@ -36,12 +38,14 @@ const statusStyles: Record<string, string> = {
   rejected: "border-red-500/30 bg-red-500/10 text-red-300",
 };
 
-function formatDate(value: string | null) {
+function formatDate(value: string | null): string {
   if (!value) return "Date inconnue";
 
   const date = new Date(value);
 
-  if (Number.isNaN(date.getTime())) return "Date inconnue";
+  if (Number.isNaN(date.getTime())) {
+    return "Date inconnue";
+  }
 
   return new Intl.DateTimeFormat("fr-FR", {
     dateStyle: "medium",
@@ -51,7 +55,6 @@ function formatDate(value: string | null) {
 
 export default function ReportsPage() {
   const [data, setData] = useState<ReportsResponse | null>(null);
-  
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [offset, setOffset] = useState(0);
@@ -61,44 +64,69 @@ export default function ReportsPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [resourceTypeFilter, setResourceTypeFilter] = useState("");
 
-
-  
   const loadReports = useCallback(async () => {
     setLoading(true);
     setError("");
 
     try {
+      const token = localStorage.getItem("access_token");
+
+      if (!token) {
+        window.location.href = "/login";
+        return;
+      }
+
       const params = new URLSearchParams({
-        limit: "20",
+        limit: String(PAGE_SIZE),
         offset: String(offset),
       });
 
-      if (search) params.set("search", search);
-      if (statusFilter) params.set("status", statusFilter);
+      if (search) {
+        params.set("search", search);
+      }
+
+      if (statusFilter) {
+        params.set("status", statusFilter);
+      }
+
       if (resourceTypeFilter) {
         params.set("resource_type", resourceTypeFilter);
       }
 
       const response = await fetch(
-        `${API_URL}/api/v1/reports?${params.toString()}`,
-        { cache: "no-store" }
+        `${API_URL}/api/v1/reports/mine?${params.toString()}`,
+        {
+          method: "GET",
+          cache: "no-store",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
       );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        window.location.href = "/login";
+        return;
+      }
 
       if (!response.ok) {
         throw new Error(`Erreur HTTP ${response.status}`);
       }
 
       const result: ReportsResponse = await response.json();
+
       setData(result);
-    } catch {
+    } catch (err) {
+      console.error("Erreur lors du chargement de l'historique :", err);
+
       setError(
-        "Impossible de charger les signalements. Vérifie que le backend est démarré et que la route API existe."
+        "Impossible de charger votre historique. Vérifiez que le backend fonctionne et que votre connexion est valide."
       );
     } finally {
       setLoading(false);
     }
   }, [offset, search, statusFilter, resourceTypeFilter]);
-
 
   useEffect(() => {
     void loadReports();
@@ -108,34 +136,49 @@ export default function ReportsPage() {
     setOffset(0);
   }, [search, statusFilter, resourceTypeFilter]);
 
+  function resetFilters() {
+    setSearchInput("");
+    setSearch("");
+    setStatusFilter("");
+    setResourceTypeFilter("");
+    setOffset(0);
+  }
+
+  function openReport(reportId: number) {
+    window.location.href = `/reports/${reportId}`;
+  }
 
   return (
     <main className="min-h-screen px-4 py-10 text-slate-100 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl space-y-8">
+        {/* En-tête */}
         <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="mb-3 text-xs font-bold uppercase tracking-[0.25em] text-cyan-400">
               Cyber Threat Intelligence
             </p>
+
             <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
               Historique des signalements
             </h1>
+
             <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
-              Consulte les ressources signalées par la communauté, leur
-              catégorie et leur statut de validation.
+              Consulte tes signalements personnels, recherche une ressource
+              et suis son statut de validation.
             </p>
           </div>
 
           <button
+            type="button"
             onClick={() => void loadReports()}
             disabled={loading}
-            className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-semibold hover:border-cyan-500/50 disabled:opacity-50"
+            className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-semibold hover:border-cyan-500/50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading ? "Chargement..." : "↻ Actualiser"}
           </button>
         </header>
 
-
+        {/* Recherche et filtres */}
         <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
           <div className="grid gap-4 md:grid-cols-3">
             <div>
@@ -145,6 +188,7 @@ export default function ReportsPage() {
               >
                 Rechercher
               </label>
+
               <form
                 onSubmit={(event) => {
                   event.preventDefault();
@@ -161,6 +205,7 @@ export default function ReportsPage() {
                   maxLength={200}
                   className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-3 text-sm outline-none focus:border-cyan-500"
                 />
+
                 <button
                   type="submit"
                   disabled={loading}
@@ -178,6 +223,7 @@ export default function ReportsPage() {
               >
                 Statut
               </label>
+
               <select
                 id="report-status"
                 value={statusFilter}
@@ -201,6 +247,7 @@ export default function ReportsPage() {
               >
                 Type de ressource
               </label>
+
               <select
                 id="report-resource-type"
                 value={resourceTypeFilter}
@@ -221,30 +268,30 @@ export default function ReportsPage() {
 
           <button
             type="button"
-            onClick={() => {
-              setSearchInput("");
-              setSearch("");
-              setStatusFilter("");
-              setResourceTypeFilter("");
-              setOffset(0);
-            }}
+            onClick={resetFilters}
             className="mt-4 text-sm text-cyan-400 hover:text-cyan-300"
           >
             Réinitialiser les filtres
           </button>
         </section>
 
-
+        {/* Statistiques */}
         <section className="grid gap-4 sm:grid-cols-3">
           <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
-            <p className="text-sm text-slate-400">Signalements enregistrés</p>
+            <p className="text-sm text-slate-400">
+              Total des résultats
+            </p>
+
             <p className="mt-3 text-3xl font-bold">
               {data ? data.total.toLocaleString("fr-FR") : loading ? "..." : "—"}
             </p>
           </div>
 
           <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
-            <p className="text-sm text-slate-400">Résultats affichés</p>
+            <p className="text-sm text-slate-400">
+              Résultats affichés
+            </p>
+
             <p className="mt-3 text-3xl font-bold">
               {data ? data.items.length : loading ? "..." : "—"}
             </p>
@@ -252,12 +299,14 @@ export default function ReportsPage() {
 
           <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
             <p className="text-sm text-slate-400">Page actuelle</p>
+
             <p className="mt-3 text-3xl font-bold">
-              {Math.floor(offset / 20) + 1}
+              {Math.floor(offset / PAGE_SIZE) + 1}
             </p>
           </div>
         </section>
 
+        {/* Erreurs */}
         {error && (
           <div
             role="alert"
@@ -267,16 +316,19 @@ export default function ReportsPage() {
           </div>
         )}
 
+        {/* Tableau des signalements */}
         <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60">
           <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
             <div>
-              <h2 className="font-semibold">Tous les signalements</h2>
+              <h2 className="font-semibold">Mes signalements</h2>
+
               <p className="mt-1 text-xs text-slate-500">
                 Les plus récents apparaissent en premier.
               </p>
             </div>
+
             <span className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-400">
-              API CTI
+              Historique personnel
             </span>
           </div>
 
@@ -286,9 +338,12 @@ export default function ReportsPage() {
             </p>
           ) : data && data.items.length === 0 ? (
             <div className="p-10 text-center">
-              <p className="font-semibold">Aucun signalement sur cette page</p>
+              <p className="font-semibold">
+                Aucun signalement trouvé
+              </p>
+
               <p className="mt-2 text-sm text-slate-400">
-                Les nouveaux signalements apparaîtront ici.
+                Essaie de modifier tes filtres ou crée un nouveau signalement.
               </p>
             </div>
           ) : data && data.items.length > 0 ? (
@@ -304,16 +359,16 @@ export default function ReportsPage() {
                       <th className="px-5 py-4 font-medium">Date</th>
                     </tr>
                   </thead>
+
                   <tbody className="divide-y divide-slate-800">
                     {data.items.map((report) => (
                       <tr
                         key={report.id}
-                        onClick={() => {
-                          window.location.href = `/reports/${report.id}`;
-                        }}
+                        onClick={() => openReport(report.id)}
                         onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            window.location.href = `/reports/${report.id}`;
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            openReport(report.id);
                           }
                         }}
                         tabIndex={0}
@@ -325,20 +380,24 @@ export default function ReportsPage() {
                           <p className="max-w-xs break-all font-medium text-cyan-300">
                             {report.value}
                           </p>
+
                           <p className="mt-1 text-xs text-slate-500">
                             {report.resource_type} · ID {report.indicator_id}
                           </p>
                         </td>
+
                         <td className="px-5 py-4">
                           <span className="rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-300">
                             {report.threat_type}
                           </span>
                         </td>
+
                         <td className="max-w-sm px-5 py-4 text-slate-400">
                           <p className="line-clamp-3 whitespace-pre-wrap">
                             {report.description}
                           </p>
                         </td>
+
                         <td className="px-5 py-4">
                           <span
                             className={`inline-flex whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-medium ${
@@ -350,6 +409,7 @@ export default function ReportsPage() {
                               report.report_status}
                           </span>
                         </td>
+
                         <td className="whitespace-nowrap px-5 py-4 text-xs text-slate-400">
                           {formatDate(report.created_at)}
                         </td>
@@ -359,26 +419,34 @@ export default function ReportsPage() {
                 </table>
               </div>
 
-              <div className="flex items-center justify-between border-t border-slate-800 px-5 py-4">
+              {/* Pagination */}
+              <div className="flex flex-col gap-3 border-t border-slate-800 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-xs text-slate-500">
-                  {data.total === 0
-                    ? "Aucun résultat"
-                    : `Résultats ${offset + 1} à ${
-                        offset + data.items.length
-                      } sur ${data.total}`}
+                  {`Résultats ${offset + 1} à ${
+                    offset + data.items.length
+                  } sur ${data.total}`}
                 </p>
+
                 <div className="flex gap-2">
                   <button
-                    onClick={() => setOffset((current) => Math.max(0, current - 20))}
+                    type="button"
+                    onClick={() =>
+                      setOffset((current) =>
+                        Math.max(0, current - PAGE_SIZE)
+                      )
+                    }
                     disabled={offset === 0 || loading}
                     className="rounded-lg border border-slate-700 px-3 py-2 text-xs hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Précédent
                   </button>
+
                   <button
-                    onClick={() => setOffset((current) => current + 20)}
+                    type="button"
+                    onClick={() => setOffset((current) => current + PAGE_SIZE)}
                     disabled={
-                      loading || offset + data.items.length >= data.total
+                      loading ||
+                      offset + data.items.length >= data.total
                     }
                     className="rounded-lg border border-slate-700 px-3 py-2 text-xs hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                   >

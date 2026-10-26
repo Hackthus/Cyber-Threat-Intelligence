@@ -295,7 +295,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Hackthus Threat Intelligence API",
+    title="Cyber Threat Intelligence API",
     description=(
         "API communautaire de signalement et de recherche "
         "de ressources potentiellement malveillantes."
@@ -561,32 +561,103 @@ def create_report(
         report_status=report.report_status,
     )
 
+
 @app.get("/api/v1/reports/mine")
 def get_my_reports(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    status: str | None = Query(default=None),
+    resource_type: str | None = Query(default=None),
+    search: str | None = Query(default=None, min_length=1, max_length=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    rows = db.execute(
+    """Retourne l'historique personnel de l'utilisateur connecté."""
+
+    statement = (
         select(Report, Indicator)
         .join(Indicator, Report.indicator_id == Indicator.id)
         .where(Report.user_id == current_user.id)
-        .order_by(Report.created_at.desc())
-        .limit(5)
-    ).all()
+    )
 
-    return [
-        {
-            "id": report.id,
-            "indicator_id": indicator.id,
-            "resource_type": indicator.resource_type,
-            "value": indicator.normalized_value,
-            "threat_type": report.threat_type,
-            "description": report.description,
-            "report_status": report.report_status,
-            "created_at": report.created_at,
-        }
-        for report, indicator in rows
-    ]
+    count_statement = (
+        select(func.count(Report.id))
+        .join(Indicator, Report.indicator_id == Indicator.id)
+        .where(Report.user_id == current_user.id)
+    )
+
+    if status is not None:
+        status = status.strip().lower()
+
+        if status not in {"pending", "confirmed", "rejected"}:
+            raise HTTPException(
+                status_code=422,
+                detail="Statut invalide.",
+            )
+
+        statement = statement.where(Report.report_status == status)
+        count_statement = count_statement.where(
+            Report.report_status == status
+        )
+
+    if resource_type is not None:
+        resource_type = resource_type.strip().lower()
+
+        if resource_type not in {"url", "domain", "email", "ip"}:
+            raise HTTPException(
+                status_code=422,
+                detail="Type de ressource invalide.",
+            )
+
+        statement = statement.where(
+            Indicator.resource_type == resource_type
+        )
+        count_statement = count_statement.where(
+            Indicator.resource_type == resource_type
+        )
+
+    if search is not None:
+        search_term = f"%{search.strip()}%"
+        search_filter = or_(
+            Indicator.normalized_value.ilike(search_term),
+            Report.threat_type.ilike(search_term),
+            Report.description.ilike(search_term),
+        )
+        statement = statement.where(search_filter)
+        count_statement = count_statement.where(search_filter)
+
+    statement = (
+        statement
+        .order_by(Report.created_at.desc(), Report.id.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+
+    rows = db.execute(statement).all()
+    total = db.scalar(count_statement) or 0
+
+    return {
+        "items": [
+            {
+                "id": report.id,
+                "indicator_id": indicator.id,
+                "resource_type": indicator.resource_type,
+                "value": indicator.normalized_value,
+                "threat_type": report.threat_type,
+                "description": report.description,
+                "report_status": report.report_status,
+                "created_at": (
+                    report.created_at.isoformat()
+                    if report.created_at
+                    else None
+                ),
+            }
+            for report, indicator in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @app.get("/api/v1/reports/{report_id}")

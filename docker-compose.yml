@@ -1,3 +1,4 @@
+
 services:
   db:
     image: postgres:16-alpine
@@ -25,6 +26,17 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - backend
     restart: unless-stopped
 
 volumes:

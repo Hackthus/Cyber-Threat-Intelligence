@@ -3,7 +3,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { Suspense, useState, useEffect } from "react";
 
 type ReportDetails = {
   id: number;
@@ -13,7 +13,7 @@ type ReportDetails = {
   threat_type: string;
   description: string;
   report_status: string;
-  created_at: string;
+  created_at: string | null;
 };
 
 const API_URL =
@@ -32,7 +32,7 @@ const statusLabels: Record<string, string> = {
   rejected: "Rejeté après vérification",
 };
 
-export default function ReportSuccessPage() {
+function ReportSuccessContent() {
   const searchParams = useSearchParams();
   const id = searchParams.get("id");
 
@@ -42,6 +42,7 @@ export default function ReportSuccessPage() {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
 
     async function loadReport() {
       setLoading(true);
@@ -54,26 +55,58 @@ export default function ReportSuccessPage() {
         return;
       }
 
+      const token = localStorage.getItem("access_token");
+
+      if (!token) {
+        window.location.href = "/login";
+        return;
+      }
+
       try {
         const response = await fetch(
-          `${API_URL}/api/v1/reports/${encodeURIComponent(id)}`
+          `${API_URL}/api/v1/reports/${encodeURIComponent(id)}`,
+          {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/json",
+            },
+            cache: "no-store",
+            signal: controller.signal,
+          }
         );
 
-        const data = await response.json();
+        if (response.status === 401) {
+          localStorage.removeItem("access_token");
 
-        if (!response.ok) {
+          if (!cancelled) {
+            window.location.href = "/login";
+          }
+
+          return;
+        }
+
+        if (response.status === 403) {
           throw new Error(
-            response.status === 404
-              ? "Ce signalement est introuvable."
-              : "Impossible de récupérer le signalement."
+            "Tu n'es pas autorisé à consulter ce signalement."
           );
         }
 
+        if (response.status === 404) {
+          throw new Error("Ce signalement est introuvable.");
+        }
+
+        if (!response.ok) {
+          throw new Error(`Erreur du serveur : HTTP ${response.status}.`);
+        }
+
+        const data: ReportDetails = await response.json();
+
         if (!cancelled) {
-          setReport(data as ReportDetails);
+          setReport(data);
         }
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && !controller.signal.aborted) {
           setError(
             err instanceof Error
               ? err.message
@@ -91,6 +124,7 @@ export default function ReportSuccessPage() {
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [id]);
 
@@ -139,11 +173,16 @@ export default function ReportSuccessPage() {
 
             <div>
               <p className="text-sm text-slate-400">Type de ressource</p>
-              <p>{resourceLabels[report.resource_type] ?? report.resource_type}</p>
+              <p>
+                {resourceLabels[report.resource_type] ??
+                  report.resource_type}
+              </p>
             </div>
 
             <div>
-              <p className="text-sm text-slate-400">Ressource signalée</p>
+              <p className="text-sm text-slate-400">
+                Ressource signalée
+              </p>
               <p className="break-all font-mono">{report.value}</p>
             </div>
 
@@ -162,7 +201,8 @@ export default function ReportSuccessPage() {
             <div>
               <p className="text-sm text-slate-400">Statut actuel</p>
               <p className="mt-1 font-semibold text-amber-300">
-                {statusLabels[report.report_status] ?? report.report_status}
+                {statusLabels[report.report_status] ??
+                  report.report_status}
               </p>
             </div>
 
@@ -191,5 +231,19 @@ export default function ReportSuccessPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function ReportSuccessPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-100">
+          <p>Chargement du signalement...</p>
+        </main>
+      }
+    >
+      <ReportSuccessContent />
+    </Suspense>
   );
 }
