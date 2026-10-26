@@ -1,19 +1,24 @@
+
 import os
 import re
 import ipaddress
-from pwdlib import PasswordHash
-from datetime import datetime, timedelta, timezone
-import jwt
-from fastapi.security import OAuth2PasswordBearer
-from fastapi.security import OAuth2PasswordRequestForm
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
+
+import jwt
+from pwdlib import PasswordHash
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Query,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, or_, select
-from fastapi import Depends, FastAPI, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import (
     DateTime,
     ForeignKey,
@@ -23,9 +28,16 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     func,
+    or_,
     select,
 )
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+
+
+# =========================================================
+# CONFIGURATION
+# =========================================================
 
 password_hash = PasswordHash.recommended()
 
@@ -33,7 +45,8 @@ JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 
 if not JWT_SECRET_KEY or len(JWT_SECRET_KEY) < 32:
     raise RuntimeError(
-        "JWT_SECRET_KEY est absente ou trop courte."
+        "JWT_SECRET_KEY est absente ou trop courte. "
+        "Configure une clé secrète d'au moins 32 caractères."
     )
 
 JWT_ALGORITHM = "HS256"
@@ -61,6 +74,10 @@ engine = create_engine(
 )
 
 
+# =========================================================
+# BASE DE DONNÉES ET MODÈLES
+# =========================================================
+
 class Base(DeclarativeBase):
     pass
 
@@ -80,6 +97,7 @@ class ReportStatus(str, Enum):
 
 class Indicator(Base):
     __tablename__ = "indicators"
+
     __table_args__ = (
         UniqueConstraint(
             "resource_type",
@@ -89,11 +107,22 @@ class Indicator(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    resource_type: Mapped[str] = mapped_column(String(20))
-    normalized_value: Mapped[str] = mapped_column(String(2048))
+
+    resource_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        index=True,
+    )
+
+    normalized_value: Mapped[str] = mapped_column(
+        String(2048),
+        nullable=False,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
 
 
@@ -105,45 +134,76 @@ class Report(Base):
     indicator_id: Mapped[int] = mapped_column(
         ForeignKey("indicators.id"),
         index=True,
+        nullable=False,
     )
 
-    user_id: Mapped[int] = mapped_column(
+    user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id"),
         index=True,
         nullable=True,
     )
 
-    threat_type: Mapped[str] = mapped_column(String(50))
-    description: Mapped[str] = mapped_column(Text)
+    threat_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+
+    description: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
 
     report_status: Mapped[str] = mapped_column(
         String(20),
         default=ReportStatus.pending.value,
         index=True,
+        nullable=False,
     )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
 
 
 class User(Base):
     __tablename__ = "users"
+
     __table_args__ = (
         UniqueConstraint("username", name="uq_user_username"),
         UniqueConstraint("email", name="uq_user_email"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    username: Mapped[str] = mapped_column(String(30), index=True)
-    email: Mapped[str] = mapped_column(String(254), index=True)
-    password_hash: Mapped[str] = mapped_column(String(255))
+
+    username: Mapped[str] = mapped_column(
+        String(30),
+        index=True,
+        nullable=False,
+    )
+
+    email: Mapped[str] = mapped_column(
+        String(254),
+        index=True,
+        nullable=False,
+    )
+
+    password_hash: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
 
+
+# =========================================================
+# SCHÉMAS PYDANTIC
+# =========================================================
 
 class UserRegister(BaseModel):
     username: str = Field(
@@ -159,6 +219,25 @@ class UserRegister(BaseModel):
         min_length=12,
         max_length=128,
     )
+
+    @field_validator("username", "email", "password", mode="before")
+    @classmethod
+    def strip_text(cls, value):
+        if not isinstance(value, str):
+            raise ValueError("Une chaîne de caractères est requise.")
+        if value != value.strip() and cls.__name__ == "UserRegister":
+            # Le mot de passe ne doit pas être silencieusement modifié.
+            # Les autres champs seront normalisés dans la route.
+            pass
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not valid_email(value):
+            raise ValueError("Adresse e-mail invalide.")
+        return value
 
 
 class UserLogin(BaseModel):
@@ -177,6 +256,47 @@ class ReportCreate(BaseModel):
     value: str = Field(min_length=3, max_length=2048)
     threat_type: str = Field(min_length=2, max_length=50)
     description: str = Field(min_length=10, max_length=2000)
+
+    @field_validator("value", "threat_type", "description", mode="before")
+    @classmethod
+    def clean_text(cls, value):
+        if not isinstance(value, str):
+            raise ValueError("Une valeur textuelle est requise.")
+
+        value = value.strip()
+
+        if any(
+            ord(char) < 32 and char not in "\n\r\t"
+            for char in value
+        ):
+            raise ValueError("Les caractères de contrôle sont interdits.")
+
+        return value
+
+    @field_validator("threat_type")
+    @classmethod
+    def validate_threat_type(cls, value: str) -> str:
+        value = value.strip().lower()
+
+        if not value or not any(char.isalnum() for char in value):
+            raise ValueError("Type de menace invalide.")
+
+        return value
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, value: str) -> str:
+        value = value.strip()
+
+        if len(value) < 10:
+            raise ValueError(
+                "La description doit contenir au moins 10 caractères."
+            )
+
+        if not any(char.isalnum() for char in value):
+            raise ValueError("La description doit contenir du texte utile.")
+
+        return value
 
 
 class ReportCreated(BaseModel):
@@ -197,7 +317,6 @@ class ReportRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-
 class SearchResult(BaseModel):
     found: bool
     resource_type: str
@@ -207,79 +326,205 @@ class SearchResult(BaseModel):
     verdict: str
 
 
+# =========================================================
+# VALIDATION DES RESSOURCES
+# =========================================================
 
-def normalize_resource(resource_type: ResourceType, value: str) -> str:
+def valid_email(value: str) -> bool:
+    if not isinstance(value, str) or len(value) > 254:
+        return False
+
+    if value.count("@") != 1:
+        return False
+
+    local, domain = value.rsplit("@", 1)
+
+    if (
+        not local
+        or len(local) > 64
+        or local.startswith(".")
+        or local.endswith(".")
+        or ".." in local
+        or not re.fullmatch(
+            r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+",
+            local,
+        )
+    ):
+        return False
+
+    try:
+        normalize_domain(domain)
+    except ValueError:
+        return False
+
+    return True
+
+
+def normalize_domain(domain: str) -> str:
+    domain = domain.rstrip(".").lower()
+
+    if not domain or len(domain) > 253 or "." not in domain:
+        raise ValueError("Nom de domaine invalide.")
+
+    try:
+        domain = domain.encode("idna").decode("ascii")
+    except UnicodeError:
+        raise ValueError("Nom de domaine invalide.")
+
+    if len(domain) > 253:
+        raise ValueError("Nom de domaine invalide.")
+
+    labels = domain.split(".")
+
+    for label in labels:
+        if (
+            not label
+            or len(label) > 63
+            or not re.fullmatch(
+                r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?",
+                label,
+            )
+        ):
+            raise ValueError("Nom de domaine invalide.")
+
+    try:
+        ipaddress.ip_address(domain)
+    except ValueError:
+        pass
+    else:
+        raise ValueError(
+            "Pour une adresse IP, sélectionnez le type Adresse IP."
+        )
+
+    return domain
+
+
+def normalize_resource(
+    resource_type: ResourceType,
+    value: str,
+) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(
+            status_code=400,
+            detail="La ressource doit être une chaîne de caractères.",
+        )
+
     value = value.strip()
 
-    if any(ord(char) < 32 for char in value):
-        raise HTTPException(400, "Caractères de contrôle interdits.")
+    if not value:
+        raise HTTPException(
+            status_code=400,
+            detail="La ressource est obligatoire.",
+        )
+
+    if len(value) > 2048:
+        raise HTTPException(
+            status_code=400,
+            detail="La ressource est trop longue.",
+        )
+
+    if any(ord(char) < 32 or char.isspace() for char in value):
+        raise HTTPException(
+            status_code=400,
+            detail="La ressource ne doit contenir ni espace "
+                   "ni caractère de contrôle.",
+        )
 
     if resource_type == ResourceType.ip:
         try:
             return str(ipaddress.ip_address(value))
         except ValueError:
             raise HTTPException(
-                400,
-                "Adresse IP invalide. Saisissez une IPv4 ou une IPv6 valide.",
+                status_code=400,
+                detail="Adresse IP invalide.",
             )
-
-    if resource_type == ResourceType.email:
-        if value.count("@") != 1:
-            raise HTTPException(400, "Adresse e-mail invalide.")
-
-        local, domain = value.rsplit("@", 1)
-
-        if (
-            not local
-            or len(local) > 64
-            or not re.fullmatch(r"[A-Za-z0-9.-]+", domain)
-            or "." not in domain
-            or domain.startswith(".")
-            or domain.endswith(".")
-        ):
-            raise HTTPException(400, "Adresse e-mail invalide.")
-
-        return value.lower()
 
     if resource_type == ResourceType.domain:
-        domain = value.rstrip(".").lower()
+        try:
+            return normalize_domain(value)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    if resource_type == ResourceType.email:
+        if not valid_email(value):
+            raise HTTPException(
+                status_code=400,
+                detail="Adresse e-mail invalide.",
+            )
+
+        local, domain = value.rsplit("@", 1)
+        return f"{local}@{normalize_domain(domain)}"
+
+    if resource_type == ResourceType.url:
+        try:
+            parsed = urlsplit(value)
+            scheme = parsed.scheme.lower()
+            hostname = parsed.hostname
+            port = parsed.port
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="URL ou port invalide.",
+            )
 
         if (
-            len(domain) > 253
-            or "." not in domain
-            or not re.fullmatch(
-                r"(?=.{1,253}$)"
-                r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-                r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+",
-                domain,
-            )
+            scheme not in {"http", "https"}
+            or not parsed.netloc
+            or not hostname
+            or parsed.username is not None
+            or parsed.password is not None
         ):
-            raise HTTPException(400, "Nom de domaine invalide.")
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "URL invalide : utilisez HTTP ou HTTPS, "
+                    "avec un hôte valide et sans identifiants."
+                ),
+            )
 
-        return domain
+        if port is not None and not 1 <= port <= 65535:
+            raise HTTPException(
+                status_code=400,
+                detail="Port URL invalide.",
+            )
 
-    parsed = urlsplit(value)
+        try:
+            normalized_host = str(ipaddress.ip_address(hostname))
+        except ValueError:
+            try:
+                normalized_host = normalize_domain(hostname)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Nom d'hôte invalide dans l'URL.",
+                )
 
-    if (
-        parsed.scheme.lower() not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-    ):
-        raise HTTPException(
-            400,
-            "URL invalide : utilisez HTTP ou HTTPS sans identifiants.",
+        if ":" in normalized_host:
+            normalized_host = f"[{normalized_host}]"
+
+        netloc = normalized_host
+        if port is not None:
+            netloc = f"{netloc}:{port}"
+
+        return urlunsplit(
+            (
+                scheme,
+                netloc,
+                parsed.path,
+                parsed.query,
+                parsed.fragment,
+            )
         )
 
-    try:
-        parsed.port
-    except ValueError:
-        raise HTTPException(400, "Port URL invalide.")
+    raise HTTPException(
+        status_code=400,
+        detail="Type de ressource non pris en charge.",
+    )
 
-    # Ne jamais visiter l'URL soumise.
-    # On conserve le chemin et les paramètres pour la recherche.
-    return value
 
+# =========================================================
+# BASE DE DONNÉES ET APPLICATION
+# =========================================================
 
 def get_db():
     with Session(engine) as session:
@@ -288,8 +533,7 @@ def get_db():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Création pratique pour le MVP.
-    # Nous migrerons vers Alembic avant un déploiement durable.
+    # Adapté au MVP. Prévoir des migrations Alembic pour la production.
     Base.metadata.create_all(bind=engine)
     yield
 
@@ -316,7 +560,49 @@ app.add_middleware(
 )
 
 
-@app.post("/api/v1/auth/register", status_code=201)
+# =========================================================
+# AUTHENTIFICATION JWT
+# =========================================================
+
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentification invalide ou expirée.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    try:
+        token_payload = jwt.decode(
+            token,
+            JWT_SECRET_KEY,
+            algorithms=[JWT_ALGORITHM],
+            options={"require": ["sub", "exp"]},
+        )
+
+        user_id = token_payload.get("sub")
+
+        if not isinstance(user_id, str) or not user_id.isdigit():
+            raise credentials_exception
+
+    except jwt.InvalidTokenError:
+        raise credentials_exception
+
+    user = db.get(User, int(user_id))
+
+    if user is None:
+        raise credentials_exception
+
+    return user
+
+
+# =========================================================
+# ROUTES : AUTHENTIFICATION
+# =========================================================
+
+@app.post("/api/v1/auth/register", status_code=status.HTTP_201_CREATED)
 def register_user(
     payload: UserRegister,
     db: Session = Depends(get_db),
@@ -330,13 +616,7 @@ def register_user(
             detail="Nom d'utilisateur invalide.",
         )
 
-    if (
-        len(email) > 254
-        or not re.fullmatch(
-            r"[^@\s]+@[^@\s]+\.[^@\s]+",
-            email,
-        )
-    ):
+    if not valid_email(email):
         raise HTTPException(
             status_code=422,
             detail="Adresse e-mail invalide.",
@@ -354,7 +634,10 @@ def register_user(
     if existing_user is not None:
         raise HTTPException(
             status_code=409,
-            detail="Ce nom d'utilisateur ou cette adresse e-mail est déjà utilisé.",
+            detail=(
+                "Ce nom d'utilisateur ou cette adresse e-mail "
+                "est déjà utilisé."
+            ),
         )
 
     user = User(
@@ -363,29 +646,31 @@ def register_user(
         password_hash=password_hash.hash(payload.password),
     )
 
-    db.add(user)
-
     try:
+        db.add(user)
         db.commit()
         db.refresh(user)
-    except Exception:
+
+    except IntegrityError:
         db.rollback()
         raise HTTPException(
             status_code=409,
-            detail="Impossible de créer le compte. Vérifiez que le nom d'utilisateur et l'e-mail sont disponibles.",
+            detail="Ce nom d'utilisateur ou cette adresse e-mail est déjà utilisé.",
+        )
+
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Impossible de créer le compte.",
         )
 
     return {
         "id": user.id,
         "username": user.username,
         "email": user.email,
-        "created_at": (
-            user.created_at.isoformat()
-            if user.created_at
-            else None
-        ),
+        "created_at": user.created_at,
     }
-
 
 
 @app.post("/api/v1/auth/login")
@@ -409,7 +694,7 @@ def login_user(
         user.password_hash,
     ):
         raise HTTPException(
-            status_code=401,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Identifiants incorrects.",
             headers={"WWW-Authenticate": "Bearer"},
         )
@@ -437,40 +722,6 @@ def login_user(
     }
 
 
-
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
-):
-    credentials_exception = HTTPException(
-        status_code=401,
-        detail="Authentification invalide ou expirée.",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-    try:
-        payload = jwt.decode(
-            token,
-            JWT_SECRET_KEY,
-            algorithms=[JWT_ALGORITHM],
-            options={"require": ["sub", "exp"]},
-        )
-        user_id = payload.get("sub")
-
-        if not isinstance(user_id, str) or not user_id.isdigit():
-            raise credentials_exception
-
-    except jwt.InvalidTokenError:
-        raise credentials_exception
-
-    user = db.get(User, int(user_id))
-
-    if user is None:
-        raise credentials_exception
-
-    return user
-
-
 @app.get("/api/v1/auth/me")
 def read_current_user(
     current_user: User = Depends(get_current_user),
@@ -483,6 +734,9 @@ def read_current_user(
     }
 
 
+# =========================================================
+# ROUTES : STATISTIQUES ET SANTÉ
+# =========================================================
 
 @app.get("/api/v1/stats")
 def get_stats(db: Session = Depends(get_db)):
@@ -509,7 +763,15 @@ def get_stats(db: Session = Depends(get_db)):
 
 @app.get("/api/v1/health")
 def health():
-    return {"status": "ok", "service": "hti-api"}
+    return {
+        "status": "ok",
+        "service": "hti-api",
+    }
+
+
+# =========================================================
+# ROUTES : SIGNALEMENTS
+# =========================================================
 
 
 @app.post(
@@ -517,7 +779,6 @@ def health():
     response_model=ReportCreated,
     status_code=status.HTTP_201_CREATED,
 )
-
 def create_report(
     payload: ReportCreate,
     db: Session = Depends(get_db),
@@ -528,51 +789,103 @@ def create_report(
         payload.value,
     )
 
-    indicator = db.scalar(
-        select(Indicator).where(
-            Indicator.resource_type == payload.resource_type.value,
-            Indicator.normalized_value == normalized,
+    try:
+        # Cherche un indicateur déjà existant.
+        indicator = db.scalar(
+            select(Indicator).where(
+                Indicator.resource_type == payload.resource_type.value,
+                Indicator.normalized_value == normalized,
+            )
         )
-    )
 
-    if indicator is None:
-        indicator = Indicator(
-            resource_type=payload.resource_type.value,
-            normalized_value=normalized,
+        if indicator is None:
+            indicator = Indicator(
+                resource_type=payload.resource_type.value,
+                normalized_value=normalized,
+            )
+            db.add(indicator)
+
+            try:
+                # Tente de créer l'indicateur.
+                db.flush()
+            except IntegrityError:
+                # Une autre requête a peut-être créé le même indicateur.
+                db.rollback()
+
+                indicator = db.scalar(
+                    select(Indicator).where(
+                        Indicator.resource_type == payload.resource_type.value,
+                        Indicator.normalized_value == normalized,
+                    )
+                )
+
+                if indicator is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Conflit lors de la création de "
+                            "l'indicateur. Réessayez."
+                        ),
+                    )
+
+        report = Report(
+            indicator_id=indicator.id,
+            user_id=current_user.id,
+            threat_type=payload.threat_type.strip().lower(),
+            description=payload.description.strip(),
+            report_status=ReportStatus.pending.value,
         )
-        db.add(indicator)
-        db.flush()
 
-    report = Report(
-        indicator_id=indicator.id,
-        user_id=current_user.id,
-        threat_type=payload.threat_type.strip().lower(),
-        description=payload.description.strip(),
-        report_status=ReportStatus.pending.value,
-    )
+        db.add(report)
+        db.commit()
+        db.refresh(report)
 
-    db.add(report)
-    db.commit()
-    db.refresh(report)
+        return ReportCreated(
+            id=report.id,
+            indicator_id=report.indicator_id,
+            report_status=report.report_status,
+        )
 
-    return ReportCreated(
-        id=report.id,
-        indicator_id=indicator.id,
-        report_status=report.report_status,
-    )
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Conflit de données lors de l'enregistrement "
+                "du signalement."
+            ),
+        )
+
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Impossible d'enregistrer le signalement.",
+        )
 
 
 @app.get("/api/v1/reports/mine")
 def get_my_reports(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    status: str | None = Query(default=None),
-    resource_type: str | None = Query(default=None),
-    search: str | None = Query(default=None, min_length=1, max_length=200),
+    status_filter: str | None = Query(
+        default=None,
+        alias="status",
+    ),
+    resource_type: ResourceType | None = Query(default=None),
+    search: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=200,
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Retourne l'historique personnel de l'utilisateur connecté."""
+    """Historique personnel de l'utilisateur connecté."""
 
     statement = (
         select(Report, Indicator)
@@ -586,34 +899,28 @@ def get_my_reports(
         .where(Report.user_id == current_user.id)
     )
 
-    if status is not None:
-        status = status.strip().lower()
+    if status_filter is not None:
+        status_filter = status_filter.strip().lower()
 
-        if status not in {"pending", "confirmed", "rejected"}:
+        if status_filter not in {item.value for item in ReportStatus}:
             raise HTTPException(
                 status_code=422,
                 detail="Statut invalide.",
             )
 
-        statement = statement.where(Report.report_status == status)
+        statement = statement.where(
+            Report.report_status == status_filter
+        )
         count_statement = count_statement.where(
-            Report.report_status == status
+            Report.report_status == status_filter
         )
 
     if resource_type is not None:
-        resource_type = resource_type.strip().lower()
-
-        if resource_type not in {"url", "domain", "email", "ip"}:
-            raise HTTPException(
-                status_code=422,
-                detail="Type de ressource invalide.",
-            )
-
         statement = statement.where(
-            Indicator.resource_type == resource_type
+            Indicator.resource_type == resource_type.value
         )
         count_statement = count_statement.where(
-            Indicator.resource_type == resource_type
+            Indicator.resource_type == resource_type.value
         )
 
     if search is not None:
@@ -646,11 +953,7 @@ def get_my_reports(
                 "threat_type": report.threat_type,
                 "description": report.description,
                 "report_status": report.report_status,
-                "created_at": (
-                    report.created_at.isoformat()
-                    if report.created_at
-                    else None
-                ),
+                "created_at": report.created_at,
             }
             for report, indicator in rows
         ],
@@ -700,20 +1003,25 @@ def get_report_details(
     }
 
 
-
 @app.get("/api/v1/reports")
 def list_reports(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    status: str | None = Query(default=None),
-    resource_type: str | None = Query(default=None),
-    search: str | None = Query(default=None, min_length=1, max_length=200),
+    status_filter: str | None = Query(
+        default=None,
+        alias="status",
+    ),
+    resource_type: ResourceType | None = Query(default=None),
+    search: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=200,
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Liste les signalements récents avec filtres et pagination."""
+    """Liste uniquement les signalements confirmés."""
 
-    
     statement = (
         select(Report, Indicator)
         .join(Indicator, Report.indicator_id == Indicator.id)
@@ -730,17 +1038,18 @@ def list_reports(
         )
     )
 
-        
-    if status is not None:
-        status = status.strip().lower()
+    if status_filter is not None:
+        status_filter = status_filter.strip().lower()
 
-        if status not in {"pending", "confirmed", "rejected"}:
+        if status_filter not in {item.value for item in ReportStatus}:
             raise HTTPException(
                 status_code=422,
                 detail="Statut invalide.",
             )
 
-        if status != ReportStatus.confirmed.value:
+        # Cette route publique de consultation ne divulgue jamais
+        # les rapports en attente ou rejetés.
+        if status_filter != ReportStatus.confirmed.value:
             return {
                 "items": [],
                 "total": 0,
@@ -748,24 +1057,12 @@ def list_reports(
                 "offset": offset,
             }
 
-        statement = statement.where(Report.report_status == status)
-        count_statement = count_statement.where(
-            Report.report_status == status
-        )
-
-
     if resource_type is not None:
-        resource_type = resource_type.strip().lower()
-        if resource_type not in {"url", "domain", "email", "ip"}:
-            raise HTTPException(
-                status_code=422,
-                detail="Type de ressource invalide.",
-            )
         statement = statement.where(
-            Indicator.resource_type == resource_type
+            Indicator.resource_type == resource_type.value
         )
         count_statement = count_statement.where(
-            Indicator.resource_type == resource_type
+            Indicator.resource_type == resource_type.value
         )
 
     if search is not None:
@@ -797,11 +1094,7 @@ def list_reports(
                 "threat_type": report.threat_type,
                 "description": report.description,
                 "report_status": report.report_status,
-                "created_at": (
-                    report.created_at.isoformat()
-                    if report.created_at
-                    else None
-                ),
+                "created_at": report.created_at,
             }
             for report, indicator in rows
         ],
@@ -811,7 +1104,14 @@ def list_reports(
     }
 
 
-@app.get("/api/v1/search", response_model=SearchResult)
+# =========================================================
+# ROUTE : RECHERCHE D'INDICATEURS
+# =========================================================
+
+@app.get(
+    "/api/v1/search",
+    response_model=SearchResult,
+)
 def search_indicator(
     resource_type: ResourceType,
     value: str = Query(min_length=3, max_length=2048),
@@ -836,8 +1136,6 @@ def search_indicator(
             verdict="unknown",
         )
 
-    
-    # Compter uniquement les signalements confirmés.
     confirmed_count = db.scalar(
         select(func.count(Report.id)).where(
             Report.indicator_id == indicator.id,
@@ -845,15 +1143,15 @@ def search_indicator(
         )
     ) or 0
 
-    # Les compteurs publics ne révèlent pas les signalements
+    # Les résultats publics ne révèlent pas les signalements
     # en attente ou rejetés.
     report_count = confirmed_count
 
-    if confirmed_count > 0:
-        verdict = "reported_confirmed"
-    else:
-        verdict = "unknown"
-
+    verdict = (
+        "reported_confirmed"
+        if confirmed_count > 0
+        else "unknown"
+    )
 
     return SearchResult(
         found=True,
