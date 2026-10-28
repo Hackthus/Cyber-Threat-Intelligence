@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from urllib.parse import urlsplit, urlunsplit
-
+from typing import Literal
 import jwt
 from pwdlib import PasswordHash
 from fastapi import (
@@ -167,6 +167,39 @@ class Report(Base):
     )
 
 
+class ModerationAudit(Base):
+    __tablename__ = "moderation_audits"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    report_id: Mapped[int] = mapped_column(
+        ForeignKey("reports.id"),
+        index=True,
+        nullable=False,
+    )
+
+    moderator_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        index=True,
+        nullable=False,
+    )
+
+    old_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+
+    new_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
 class User(Base):
     __tablename__ = "users"
 
@@ -192,6 +225,13 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
+    )
+
+    role: Mapped[str] = mapped_column(
+    String(20),
+    default="user",
+    server_default="user",
+    nullable=False,
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -250,6 +290,8 @@ class UserLogin(BaseModel):
         max_length=128,
     )
 
+class ReportStatusUpdate(BaseModel):
+    report_status: Literal["confirmed", "rejected"]
 
 class ReportCreate(BaseModel):
     resource_type: ResourceType
@@ -598,6 +640,28 @@ def get_current_user(
     return user
 
 
+def require_moderator(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    if current_user.role not in {"moderator", "admin"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Droits de modération requis.",
+        )
+    return current_user
+
+
+def require_admin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Droits administrateur requis.",
+        )
+    return current_user
+
+
 # =========================================================
 # ROUTES : AUTHENTIFICATION
 # =========================================================
@@ -730,9 +794,9 @@ def read_current_user(
         "id": current_user.id,
         "username": current_user.username,
         "email": current_user.email,
+        "role": current_user.role,
         "created_at": current_user.created_at,
     }
-
 
 # =========================================================
 # ROUTES : STATISTIQUES ET SANTÉ
@@ -962,6 +1026,136 @@ def get_my_reports(
         "offset": offset,
     }
 
+@app.get("/api/v1/admin/reports/pending")
+def list_pending_reports(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_moderator),
+):
+    """Liste les signalements en attente de modération."""
+
+    rows = db.execute(
+        select(Report, Indicator)
+        .join(Indicator, Report.indicator_id == Indicator.id)
+        .where(Report.report_status == ReportStatus.pending.value)
+        .order_by(Report.created_at.asc(), Report.id.asc())
+    ).all()
+
+    return {
+        "items": [
+            {
+                "id": report.id,
+                "indicator_id": indicator.id,
+                "resource_type": indicator.resource_type,
+                "value": indicator.normalized_value,
+                "threat_type": report.threat_type,
+                "description": report.description,
+                "report_status": report.report_status,
+                "user_id": report.user_id,
+                "created_at": report.created_at,
+            }
+            for report, indicator in rows
+        ],
+        "total": len(rows),
+    }
+
+
+
+@app.patch("/api/v1/admin/reports/{report_id}/status")
+def moderate_report(
+    report_id: int,
+    payload: ReportStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_moderator),
+):
+    """Confirme ou rejette un signalement et trace la décision."""
+
+    report = db.get(Report, report_id)
+
+    if report is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Signalement introuvable.",
+        )
+
+    if report.report_status != ReportStatus.pending.value:
+        raise HTTPException(
+            status_code=409,
+            detail="Ce signalement a déjà été traité.",
+        )
+
+    old_status = report.report_status
+    new_status = payload.report_status
+
+    try:
+        report.report_status = new_status
+
+        audit = ModerationAudit(
+            report_id=report.id,
+            moderator_id=current_user.id,
+            old_status=old_status,
+            new_status=new_status,
+        )
+        db.add(audit)
+
+        # La décision et sa trace sont enregistrées ensemble.
+        db.commit()
+        db.refresh(report)
+
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Impossible d'enregistrer la décision de modération.",
+        )
+
+    return {
+        "id": report.id,
+        "report_status": report.report_status,
+        "message": "Statut du signalement mis à jour.",
+    }
+
+
+@app.get("/api/v1/admin/audit")
+def list_moderation_audit(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Consulte l'historique des décisions de modération."""
+
+    rows = db.execute(
+        select(ModerationAudit, User.username)
+        .join(User, ModerationAudit.moderator_id == User.id)
+        .order_by(
+            ModerationAudit.created_at.desc(),
+            ModerationAudit.id.desc(),
+        )
+        .limit(limit)
+        .offset(offset)
+    ).all()
+
+    total = db.scalar(
+        select(func.count()).select_from(ModerationAudit)
+    ) or 0
+
+    return {
+        "items": [
+            {
+                "id": audit.id,
+                "report_id": audit.report_id,
+                "moderator_id": audit.moderator_id,
+                "moderator_username": username,
+                "old_status": audit.old_status,
+                "new_status": audit.new_status,
+                "created_at": audit.created_at,
+            }
+            for audit, username in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 @app.get("/api/v1/reports/{report_id}")
 def get_report_details(

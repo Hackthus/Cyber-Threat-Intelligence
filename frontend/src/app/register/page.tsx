@@ -2,17 +2,24 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
+
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
 export default function RegisterPage() {
+  const router = useRouter();
+
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage("");
     setError("");
@@ -22,14 +29,69 @@ export default function RegisterPage() {
       return;
     }
 
+    if (password.length > 128) {
+      setError("Le mot de passe ne doit pas dépasser 128 caractères.");
+      return;
+    }
+
     if (password !== confirmPassword) {
       setError("Les mots de passe ne correspondent pas.");
       return;
     }
 
-    setMessage(
-      "Interface prête. La création de compte sera activée après connexion au backend."
-    );
+    setLoading(true);
+
+    try {
+      const response = await fetch(`${API_URL}/api/v1/auth/register`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          username: name.trim(),
+          email: email.trim().toLowerCase(),
+          password,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        const detail = data.detail;
+
+        if (typeof detail === "string") {
+          setError(detail);
+        } else if (Array.isArray(detail)) {
+          setError(
+            detail
+              .map((item: { msg?: string }) => item.msg ?? "Donnée invalide")
+              .join(" ")
+          );
+        } else {
+          setError("Impossible de créer le compte. Réessaie.");
+        }
+
+        return;
+      }
+
+      setMessage(
+        `Compte créé avec succès pour ${data.username ?? name.trim()} !`
+      );
+
+      setPassword("");
+      setConfirmPassword("");
+
+      // L'inscription ne connecte pas automatiquement l'utilisateur.
+      window.setTimeout(() => {
+        router.push("/login");
+      }, 1200);
+    } catch {
+      setError(
+        "Impossible de joindre le serveur. Vérifie que le backend fonctionne."
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -50,35 +112,28 @@ export default function RegisterPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          
-        <div>
-          <label
-            htmlFor="username"
-            className="mb-2 block text-sm font-medium text-slate-300"
-          >
-            Nom d'utilisateur
-          </label>
-          <input
-            id="username"
-            type="text"
-            autoComplete="username"
-            required
-            minLength={3}
-            maxLength={30}
-            pattern="[A-Za-z0-9_-]+"
-            title="Utilise 3 à 30 caractères : lettres, chiffres, tirets ou tirets bas."
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="ex. hackthus237"
-            className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-cyan-500"
-          />
-        </div>
+          <div>
+            <label htmlFor="username" className="mb-2 block text-sm font-medium text-slate-300">
+              Nom d'utilisateur
+            </label>
+            <input
+              id="username"
+              type="text"
+              autoComplete="username"
+              required
+              minLength={3}
+              maxLength={30}
+              pattern="[A-Za-z0-9_-]+"
+              title="3 à 30 caractères : lettres, chiffres, tirets ou tirets bas."
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="ex. hackthus237"
+              className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-cyan-500"
+            />
+          </div>
 
           <div>
-            <label
-              htmlFor="email"
-              className="mb-2 block text-sm font-medium text-slate-300"
-            >
+            <label htmlFor="email" className="mb-2 block text-sm font-medium text-slate-300">
               Adresse e-mail
             </label>
             <input
@@ -86,6 +141,7 @@ export default function RegisterPage() {
               type="email"
               autoComplete="email"
               required
+              maxLength={254}
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               placeholder="nom@exemple.com"
@@ -94,10 +150,7 @@ export default function RegisterPage() {
           </div>
 
           <div>
-            <label
-              htmlFor="password"
-              className="mb-2 block text-sm font-medium text-slate-300"
-            >
+            <label htmlFor="password" className="mb-2 block text-sm font-medium text-slate-300">
               Mot de passe
             </label>
             <input
@@ -106,6 +159,7 @@ export default function RegisterPage() {
               autoComplete="new-password"
               required
               minLength={12}
+              maxLength={128}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder="12 caractères minimum"
@@ -114,10 +168,7 @@ export default function RegisterPage() {
           </div>
 
           <div>
-            <label
-              htmlFor="confirm-password"
-              className="mb-2 block text-sm font-medium text-slate-300"
-            >
+            <label htmlFor="confirm-password" className="mb-2 block text-sm font-medium text-slate-300">
               Confirmer le mot de passe
             </label>
             <input
@@ -126,6 +177,7 @@ export default function RegisterPage() {
               autoComplete="new-password"
               required
               minLength={12}
+              maxLength={128}
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}
               placeholder="Répète ton mot de passe"
@@ -134,37 +186,29 @@ export default function RegisterPage() {
           </div>
 
           {error && (
-            <p
-              role="alert"
-              className="rounded-lg border border-red-900 bg-red-950/30 p-3 text-sm text-red-300"
-            >
+            <p role="alert" className="rounded-lg border border-red-900 bg-red-950/30 p-3 text-sm text-red-300">
               {error}
             </p>
           )}
 
           {message && (
-            <p
-              role="status"
-              className="rounded-lg border border-cyan-900 bg-cyan-950/30 p-3 text-sm text-cyan-300"
-            >
+            <p role="status" className="rounded-lg border border-cyan-900 bg-cyan-950/30 p-3 text-sm text-cyan-300">
               {message}
             </p>
           )}
 
           <button
             type="submit"
-            className="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
+            disabled={loading}
+            className="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            Créer mon compte
+            {loading ? "Création en cours..." : "Créer mon compte"}
           </button>
         </form>
 
         <p className="mt-6 text-center text-sm text-slate-400">
           Tu as déjà un compte ?{" "}
-          <Link
-            href="/login"
-            className="font-semibold text-cyan-400 hover:text-cyan-300"
-          >
+          <Link href="/login" className="font-semibold text-cyan-400 hover:text-cyan-300">
             Connecte-toi
           </Link>
         </p>
@@ -172,4 +216,3 @@ export default function RegisterPage() {
     </main>
   );
 }
-

@@ -4,6 +4,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from datetime import datetime, timedelta, timezone
 import jwt
+from sqlalchemy import select
+from app.main import User
 
 from app import main
 
@@ -312,7 +314,7 @@ def test_my_reports_only_returns_current_users_reports(client, second_user_heade
 
     assert response.status_code == 200
 
-    reports = response.json()
+    reports = response.json()["items"]
     report_values = [report["value"] for report in reports]
 
     assert "first-user-demo.example" in report_values
@@ -660,3 +662,233 @@ def test_public_stats_do_not_expose_pending_or_rejected_counts(client):
     assert "rejected_reports" not in data
     assert data["total_reports"] == 0
     assert data["confirmed_reports"] == 0
+
+
+
+def set_test_user_role(client, role: str):
+    with main.Session(main.engine) as db:
+        user = db.scalar(
+            select(main.User).where(main.User.username == "testuser")
+        )
+        assert user is not None
+        user.role = role
+        db.commit()
+
+def test_regular_user_cannot_list_pending_reports(client):
+    response = client.get("/api/v1/admin/reports/pending")
+
+    assert response.status_code == 403
+
+
+def test_moderator_can_list_pending_reports(client):
+    set_test_user_role(client, "moderator")
+
+    response = client.get("/api/v1/admin/reports/pending")
+
+    assert response.status_code == 200
+    assert "items" in response.json()
+    assert "total" in response.json()
+
+
+def test_moderator_cannot_moderate_missing_report(client):
+    set_test_user_role(client, "moderator")
+
+    response = client.patch(
+        "/api/v1/admin/reports/999999/status",
+        json={"report_status": "confirmed"},
+    )
+
+    assert response.status_code == 404
+
+def create_test_report(client):
+    response = client.post(
+        "/api/v1/reports",
+        json={
+            "resource_type": "domain",
+            "value": "suspicious-example-test.com",
+            "threat_type": "phishing",
+            "description": (
+                "Domaine de test suspect utilisé pour vérifier "
+                "le processus de modération."
+            ),
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["report_status"] == "pending"
+    return response.json()["id"]
+
+
+def test_moderator_can_confirm_pending_report(client):
+    set_test_user_role(client, "moderator")
+    report_id = create_test_report(client)
+
+    response = client.patch(
+        f"/api/v1/admin/reports/{report_id}/status",
+        json={"report_status": "confirmed"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["report_status"] == "confirmed"
+
+
+def test_moderator_can_reject_pending_report(client):
+    set_test_user_role(client, "moderator")
+    report_id = create_test_report(client)
+
+    response = client.patch(
+        f"/api/v1/admin/reports/{report_id}/status",
+        json={"report_status": "rejected"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["report_status"] == "rejected"
+
+
+def test_moderator_cannot_moderate_report_twice(client):
+    set_test_user_role(client, "moderator")
+    report_id = create_test_report(client)
+
+    first_response = client.patch(
+        f"/api/v1/admin/reports/{report_id}/status",
+        json={"report_status": "confirmed"},
+    )
+    assert first_response.status_code == 200
+
+    second_response = client.patch(
+        f"/api/v1/admin/reports/{report_id}/status",
+        json={"report_status": "rejected"},
+    )
+
+    assert second_response.status_code == 409
+
+
+def test_regular_user_cannot_change_report_status(client):
+    report_id = create_test_report(client)
+
+    response = client.patch(
+        f"/api/v1/admin/reports/{report_id}/status",
+        json={"report_status": "confirmed"},
+    )
+
+    assert response.status_code == 403
+
+def test_moderation_creates_audit_entry(client):
+    set_test_user_role(client, "moderator")
+    report_id = create_test_report(client)
+
+    response = client.patch(
+        f"/api/v1/admin/reports/{report_id}/status",
+        json={"report_status": "confirmed"},
+    )
+
+    assert response.status_code == 200
+
+    with main.Session(main.engine) as db:
+        audit = db.scalar(
+            select(main.ModerationAudit).where(
+                main.ModerationAudit.report_id == report_id
+            )
+        )
+
+        assert audit is not None
+        assert audit.moderator_id == 1
+        assert audit.old_status == "pending"
+        assert audit.new_status == "confirmed"
+
+
+
+def test_regular_user_cannot_access_moderation_audit(client):
+    response = client.get("/api/v1/admin/audit")
+
+    assert response.status_code == 403
+
+
+def test_moderator_cannot_access_moderation_audit(client):
+    set_test_user_role(client, "moderator")
+
+    response = client.get("/api/v1/admin/audit")
+
+    assert response.status_code == 403
+
+
+def test_admin_can_access_moderation_audit(client):
+    set_test_user_role(client, "admin")
+
+    response = client.get("/api/v1/admin/audit")
+
+    assert response.status_code == 200
+    assert "items" in response.json()
+    assert "total" in response.json()
+    assert response.json()["limit"] == 20
+    assert response.json()["offset"] == 0
+
+
+
+def test_moderation_audit_contains_decision_details(client):
+    set_test_user_role(client, "moderator")
+    report_id = create_test_report(client)
+
+    moderation_response = client.patch(
+        f"/api/v1/admin/reports/{report_id}/status",
+        json={"report_status": "confirmed"},
+    )
+    assert moderation_response.status_code == 200
+
+    set_test_user_role(client, "admin")
+
+    audit_response = client.get("/api/v1/admin/audit")
+    assert audit_response.status_code == 200
+
+    items = audit_response.json()["items"]
+    entry = next(
+        item for item in items
+        if item["report_id"] == report_id
+    )
+
+    assert entry["moderator_username"] == "testuser"
+    assert entry["old_status"] == "pending"
+    assert entry["new_status"] == "confirmed"
+
+
+def test_moderation_audit_pagination_limit(client):
+    set_test_user_role(client, "moderator")
+
+    for _ in range(3):
+        report_id = create_test_report(client)
+        response = client.patch(
+            f"/api/v1/admin/reports/{report_id}/status",
+            json={"report_status": "confirmed"},
+        )
+        assert response.status_code == 200
+
+    set_test_user_role(client, "admin")
+
+    response = client.get("/api/v1/admin/audit?limit=2&offset=0")
+
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 2
+    assert response.json()["limit"] == 2
+    assert response.json()["offset"] == 0
+    assert response.json()["total"] == 3
+
+
+def test_moderation_audit_pagination_offset(client):
+    set_test_user_role(client, "moderator")
+
+    for _ in range(3):
+        report_id = create_test_report(client)
+        response = client.patch(
+            f"/api/v1/admin/reports/{report_id}/status",
+            json={"report_status": "confirmed"},
+        )
+        assert response.status_code == 200
+
+    set_test_user_role(client, "admin")
+
+    response = client.get("/api/v1/admin/audit?limit=2&offset=2")
+
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 1
+    assert response.json()["limit"] == 2
+    assert response.json()["offset"] == 2
+    assert response.json()["total"] == 3
