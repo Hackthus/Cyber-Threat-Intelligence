@@ -290,6 +290,11 @@ class UserLogin(BaseModel):
         max_length=128,
     )
 
+
+class UserRoleUpdate(BaseModel):
+    role: Literal["user", "moderator", "admin"]
+
+
 class ReportStatusUpdate(BaseModel):
     report_status: Literal["confirmed", "rejected"]
 
@@ -796,6 +801,104 @@ def read_current_user(
         "email": current_user.email,
         "role": current_user.role,
         "created_at": current_user.created_at,
+    }
+
+
+
+# =========================================================
+# ROUTES : ADMINISTRATION DES UTILISATEURS
+# =========================================================
+
+@app.get("/api/v1/admin/users")
+def list_admin_users(
+    q: str = Query(default="", max_length=254),
+    role: Literal["user", "moderator", "admin"] | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Liste les utilisateurs sans exposer les mots de passe."""
+
+    query = select(User)
+
+    if q.strip():
+        term = f"%{q.strip()}%"
+        query = query.where(
+            or_(
+                User.username.ilike(term),
+                User.email.ilike(term),
+            )
+        )
+
+    if role:
+        query = query.where(User.role == role)
+
+    total_query = select(func.count()).select_from(query.subquery())
+    total = db.scalar(total_query) or 0
+
+    users = db.scalars(
+        query.order_by(User.id.desc()).limit(limit).offset(offset)
+    ).all()
+
+    return {
+        "items": [
+            {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "role": user.role,
+                "created_at": user.created_at,
+            }
+            for user in users
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.patch("/api/v1/admin/users/{user_id}/role")
+def update_admin_user_role(
+    user_id: int,
+    payload: UserRoleUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Modifie le rôle d'un utilisateur, pour les administrateurs."""
+
+    user = db.get(User, user_id)
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Utilisateur introuvable.",
+        )
+
+    if user.id == current_user.id and payload.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu ne peux pas retirer ton propre rôle administrateur.",
+        )
+
+    user.role = payload.role
+
+    try:
+        db.commit()
+        db.refresh(user)
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Impossible d'enregistrer le nouveau rôle.",
+        )
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "role": user.role,
+        "message": "Rôle utilisateur mis à jour.",
     }
 
 # =========================================================

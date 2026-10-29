@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import WorkspaceLayout from "@/components/WorkspaceLayout";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
@@ -297,20 +298,10 @@ export default function ModerationPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 px-4 py-10 text-slate-100 sm:px-6">
-      <div className="mx-auto max-w-6xl">
-        <header className="mb-8">
-          <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-400">
-            Administration · Sécurité
-          </p>
-          <h1 className="mt-3 text-3xl font-bold sm:text-4xl">
-            Centre de modération
-          </h1>
-          <p className="mt-3 text-slate-400">
-            Examine les signalements communautaires et suis les décisions
-            enregistrées dans l'audit.
-          </p>
-        </header>
+    <WorkspaceLayout
+      title="Centre de modération"
+      description="Examine les signalements communautaires et suis les décisions enregistrées dans l'audit."
+    >
 
         {error && (
           <div
@@ -490,7 +481,6 @@ export default function ModerationPage() {
           L'API contrôle les permissions à chaque requête. L'affichage de
           l'historique est réservé aux administrateurs.
         </p>
-      </div>
-    </main>
+    </WorkspaceLayout>
   );
 }

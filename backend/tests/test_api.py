@@ -892,3 +892,146 @@ def test_moderation_audit_pagination_offset(client):
     assert response.json()["limit"] == 2
     assert response.json()["offset"] == 2
     assert response.json()["total"] == 3
+
+
+# =========================================================
+# TESTS : ADMINISTRATION DES UTILISATEURS
+# =========================================================
+
+def test_admin_can_list_users(client):
+    set_test_user_role(client, "admin")
+
+    response = client.get("/api/v1/admin/users")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+    assert "total" in data
+    assert any(user["username"] == "testuser" for user in data["items"])
+    assert all("password_hash" not in user for user in data["items"])
+
+
+def test_regular_user_cannot_list_users(client):
+    response = client.get("/api/v1/admin/users")
+
+    assert response.status_code == 403
+
+
+def test_admin_can_search_users_by_username_or_email(client):
+    set_test_user_role(client, "admin")
+
+    response = client.get(
+        "/api/v1/admin/users",
+        params={"q": "testuser"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert any(user["username"] == "testuser" for user in data["items"])
+
+
+def test_admin_can_filter_users_by_role(client):
+    set_test_user_role(client, "admin")
+
+    response = client.get(
+        "/api/v1/admin/users",
+        params={"role": "admin"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert all(user["role"] == "admin" for user in data["items"])
+    assert any(user["username"] == "testuser" for user in data["items"])
+
+
+def test_admin_can_change_another_users_role(client, second_user_headers):
+    set_test_user_role(client, "admin")
+
+    response = client.get(
+        "/api/v1/admin/users",
+        params={"q": "seconduser"},
+    )
+    assert response.status_code == 200
+
+    second_user = next(
+        user for user in response.json()["items"]
+        if user["username"] == "seconduser"
+    )
+
+    response = client.patch(
+        f"/api/v1/admin/users/{second_user['id']}/role",
+        json={"role": "moderator"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["role"] == "moderator"
+
+
+def test_admin_cannot_demote_self(client):
+    set_test_user_role(client, "admin")
+
+    response = client.get("/api/v1/auth/me")
+    assert response.status_code == 200
+    admin_id = response.json()["id"]
+
+    response = client.patch(
+        f"/api/v1/admin/users/{admin_id}/role",
+        json={"role": "user"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_admin_cannot_change_missing_user_role(client):
+    set_test_user_role(client, "admin")
+
+    response = client.patch(
+        "/api/v1/admin/users/999999/role",
+        json={"role": "moderator"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_admin_role_update_rejects_invalid_role(client):
+    set_test_user_role(client, "admin")
+
+    response = client.patch(
+        "/api/v1/admin/users/1/role",
+        json={"role": "superadmin"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_regular_user_cannot_change_roles(client, second_user_headers):
+    response = client.get(
+        "/api/v1/admin/users",
+        headers=second_user_headers,
+        params={"q": "testuser"},
+    )
+    assert response.status_code == 403
+
+    response = client.patch(
+        "/api/v1/admin/users/1/role",
+        headers=second_user_headers,
+        json={"role": "admin"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_admin_user_list_pagination(client, second_user_headers):
+    set_test_user_role(client, "admin")
+
+    response = client.get(
+        "/api/v1/admin/users",
+        params={"limit": 1, "offset": 0},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["items"]) <= 1
+    assert data["limit"] == 1
+    assert data["offset"] == 0
+    assert data["total"] >= 2

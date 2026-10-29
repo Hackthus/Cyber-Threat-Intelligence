@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import WorkspaceLayout from "@/components/WorkspaceLayout";
 
 type Stats = {
   total_indicators: number;
@@ -251,22 +252,13 @@ export default function DashboardPage() {
   const myReportsCount = myReportsTotal ?? 0;
 
   return (
-    <main className="min-h-screen px-4 py-8 text-slate-100 sm:px-6 sm:py-10 lg:px-8">
+    <WorkspaceLayout
+      title="Tableau de bord"
+      description="Suivez vos signalements, consultez les indicateurs confirmés et surveillez les menaces."
+    >
       <div className="mx-auto max-w-7xl space-y-8">
         <header className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-400">
-              Cyber Threat Intelligence
-            </p>
-
-            <h1 className="mt-2 text-3xl font-bold tracking-tight text-white sm:text-4xl">
-              Tableau de bord
-            </h1>
-
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
-              Vue d’ensemble des indicateurs de menace, des
-              signalements de la communauté et de ton activité.
-            </p>
 
             {lastUpdated && (
               <p className="mt-3 text-xs text-slate-500">
@@ -600,6 +592,6 @@ export default function DashboardPage() {
           Hackthus Threat Intelligence · Community Edition
         </footer>
       </div>
-    </main>
+    </WorkspaceLayout>
   );
 }
